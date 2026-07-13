@@ -201,13 +201,45 @@ object Prober {
         )
     }
 
-    private suspend fun showVantage() {
+    private fun httpGet(url: String): String? = try {
+        apiClient.newCall(
+            Request.Builder().url(url)
+                .header("User-Agent", "Mozilla/5.0 (Android)")
+                .build()
+        ).execute().use { if (it.isSuccessful) it.body?.string() else null }
+    } catch (e: Exception) { null }
+
+    /**
+     * Vantage IP via Yandex Интернетометр. Works under Yandex-only allowlists
+     * ("белые списки"), where ip-api.com / ipify are blocked but yandex.ru is reachable.
+     */
+    private fun yandexVantage(): Boolean {
+        var ip = httpGet("https://yandex.ru/internet/api/v0/ip")?.trim()?.trim('"') ?: ""
+        val page = httpGet("https://yandex.ru/internet/") ?: ""
+        if (!IPV4.matches(ip)) {
+            ip = Regex("\"v4\":\"([^\"]*)\"").find(page)?.groupValues?.get(1) ?: ""
+        }
+        if (!IPV4.matches(ip)) return false
+        val isp = Regex("\"localName\":\"([^\"]*)\"").find(page)?.groupValues?.get(1) ?: ""
+        val asn = Regex("\"asn\":\\[([0-9,]*)]").find(page)?.groupValues?.get(1) ?: ""
+        val vpn = when (Regex("\"isVpn\":(true|false)").find(page)?.groupValues?.get(1)) {
+            "true" -> "да"; "false" -> "нет"; else -> "?"
+        }
+        State.log("==============================================================")
+        State.log(" ТЕСТ ИДЁТ С IP: $ip   (источник: Яндекс Интернетометр)")
+        State.log("   провайдер:   ${isp.ifEmpty { "?" }}   |  VPN по мнению Яндекса: $vpn")
+        State.log("   ASN:         ${asn.ifEmpty { "?" }}")
+        State.log("   -> это ТВОЙ провайдер? если нет — VPN включён, выключи его.")
+        State.log("==============================================================")
+        return true
+    }
+
+    private fun showVantage() {
+        // Яндекс — основной источник (работает под белыми списками).
+        if (yandexVantage()) return
+        // Fallback для обычных сетей: ip-api.com -> ipify.
         try {
-            val line = apiClient.newCall(
-                Request.Builder()
-                    .url("http://ip-api.com/line/?fields=query,country,city,isp,as")
-                    .build()
-            ).execute().use { it.body?.string() ?: "" }
+            val line = httpGet("http://ip-api.com/line/?fields=query,country,city,isp,as") ?: ""
             val parts = line.trim().lines()
             val ip = parts.getOrNull(0)?.trim() ?: ""
             if (IPV4.matches(ip)) {
@@ -221,17 +253,11 @@ object Prober {
                 return
             }
         } catch (e: Exception) { /* fall through */ }
-        try {
-            val ip2 = apiClient.newCall(
-                Request.Builder().url("https://api.ipify.org").build()
-            ).execute().use { it.body?.string()?.trim() ?: "" }
-            if (ip2.isNotEmpty())
-                State.log("ТЕСТ ИДЁТ С IP: $ip2  (проверь, что это твой провайдер, а не VPN)")
-            else
-                State.log("vantage: не удалось определить внешний IP — продолжаю.")
-        } catch (e: Exception) {
+        val ip2 = httpGet("https://api.ipify.org")?.trim() ?: ""
+        if (IPV4.matches(ip2))
+            State.log("ТЕСТ ИДЁТ С IP: $ip2  (проверь, что это твой провайдер, а не VPN)")
+        else
             State.log("vantage: не удалось определить внешний IP — продолжаю.")
-        }
     }
 
     private suspend fun runRank(
