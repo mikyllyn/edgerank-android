@@ -201,10 +201,15 @@ object Prober {
         )
     }
 
+    private const val BROWSER_UA =
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
     private fun httpGet(url: String): String? = try {
         apiClient.newCall(
             Request.Builder().url(url)
-                .header("User-Agent", "Mozilla/5.0 (Android)")
+                .header("User-Agent", BROWSER_UA)
+                .header("Accept", "text/html,application/json,*/*")
+                .header("Accept-Language", "ru,en;q=0.9")
                 .build()
         ).execute().use { if (it.isSuccessful) it.body?.string() else null }
     } catch (e: Exception) { null }
@@ -220,14 +225,22 @@ object Prober {
             ip = Regex("\"v4\":\"([^\"]*)\"").find(page)?.groupValues?.get(1) ?: ""
         }
         if (!IPV4.matches(ip)) return false
-        val isp = Regex("\"localName\":\"([^\"]*)\"").find(page)?.groupValues?.get(1) ?: ""
-        val asn = Regex("\"asn\":\\[([0-9,]*)]").find(page)?.groupValues?.get(1) ?: ""
-        val vpn = when (Regex("\"isVpn\":(true|false)").find(page)?.groupValues?.get(1)) {
+        // Anchor on the "isp":{...} block so we never grab an unrelated field.
+        val ispBlock = Regex("\"isp\":\\{([^}]*)}").find(page)?.groupValues?.get(1) ?: ""
+        val isp = Regex("\"localName\":\"([^\"]*)\"").find(ispBlock)?.groupValues?.get(1) ?: ""
+        val asn = Regex("\"asn\":\\[([0-9,]*)]").find(ispBlock)?.groupValues?.get(1) ?: ""
+        val vpn = when (Regex("\"isVpn\":(true|false)").find(ispBlock)?.groupValues?.get(1)) {
             "true" -> "да"; "false" -> "нет"; else -> "?"
+        }
+        val provider = when {
+            isp.isNotEmpty() -> "$isp   |  VPN по мнению Яндекса: $vpn"
+            asn.isNotEmpty() -> "имя не указано (ASN $asn)   |  VPN: $vpn"
+            page.isEmpty() -> "Интернетометр не открылся (страница пуста/капча)"
+            else -> "Яндекс не отдал имя провайдера для этой сети"
         }
         State.log("==============================================================")
         State.log(" ТЕСТ ИДЁТ С IP: $ip   (источник: Яндекс Интернетометр)")
-        State.log("   провайдер:   ${isp.ifEmpty { "?" }}   |  VPN по мнению Яндекса: $vpn")
+        State.log("   провайдер:   $provider")
         State.log("   ASN:         ${asn.ifEmpty { "?" }}")
         State.log("   -> это ТВОЙ провайдер? если нет — VPN включён, выключи его.")
         State.log("==============================================================")

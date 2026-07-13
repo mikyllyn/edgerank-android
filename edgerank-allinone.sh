@@ -133,20 +133,30 @@ log(){ printf '%s\n' "$*" >&2; }
 yandex_vantage(){
   # Работает под "белыми списками": наружу пускают только Яндекс (DNS+Метрика).
   # Берём внешний IP из Яндекс.Интернетометра (yandex.ru — в белом списке).
-  local ip page isp asn v
-  ip="$(curl -s --max-time 6 'https://yandex.ru/internet/api/v0/ip' 2>/dev/null | tr -cd '0-9.')"
+  local ua ip page ispblock isp asn v
+  ua='Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+  ip="$(curl -s --max-time 6 -A "$ua" -H 'Accept-Language: ru,en;q=0.9' 'https://yandex.ru/internet/api/v0/ip' 2>/dev/null | tr -cd '0-9.')"
   printf '%s' "$ip" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || return 1
-  page="$(curl -s --max-time 8 'https://yandex.ru/internet/' 2>/dev/null)"
-  isp="$(printf '%s' "$page" | grep -oE '"localName":"[^"]*"' | head -1 | sed 's/.*"localName":"//;s/"$//')"
-  asn="$(printf '%s' "$page" | grep -oE '"asn":\[[0-9,]*\]' | head -1 | sed 's/"asn":\[//;s/\]//')"
-  case "$(printf '%s' "$page" | grep -oE '"isVpn":(true|false)' | head -1)" in
+  page="$(curl -s --max-time 8 -A "$ua" -H 'Accept-Language: ru,en;q=0.9' 'https://yandex.ru/internet/' 2>/dev/null)"
+  ispblock="$(printf '%s' "$page" | grep -oE '"isp":\{[^}]*\}' | head -1)"
+  isp="$(printf '%s' "$ispblock" | grep -oE '"localName":"[^"]*"' | head -1 | sed 's/.*"localName":"//;s/"$//')"
+  asn="$(printf '%s' "$ispblock" | grep -oE '"asn":\[[0-9,]*\]' | head -1 | sed 's/"asn":\[//;s/\]//')"
+  case "$(printf '%s' "$ispblock" | grep -oE '"isVpn":(true|false)' | head -1)" in
     *true)  v=да;;
     *false) v=нет;;
     *)      v='?';;
   esac
   log "=============================================================="
   log " ТЕСТ ИДЁТ С IP: $ip   (источник: Яндекс Интернетометр)"
-  log "   провайдер:   ${isp:-?}   |  VPN по мнению Яндекса: $v"
+  if [ -n "$isp" ]; then
+    log "   провайдер:   $isp   |  VPN по мнению Яндекса: $v"
+  elif [ -n "$asn" ]; then
+    log "   провайдер:   имя не указано (ASN $asn)   |  VPN: $v"
+  elif [ -z "$page" ]; then
+    log "   провайдер:   Интернетометр не открылся (страница пуста/капча)"
+  else
+    log "   провайдер:   Яндекс не отдал имя провайдера для этой сети"
+  fi
   log "   ASN:         ${asn:-?}"
   log "   -> это ТВОЙ провайдер? если нет — VPN включён, выключи его."
   log "=============================================================="
