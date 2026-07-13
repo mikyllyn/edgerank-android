@@ -1,0 +1,53 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0 platform-tools'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Generate self-signed keystore
+        run: |
+          keytool -genkeypair -v \
+            -keystore "$PWD/ci.jks" \
+            -storepass ci-build -keypass ci-build \
+            -alias ci -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=edgerank-ci, OU=ci, O=ci, L=ci, S=ci, C=US"
+
+      - name: Build signed release APK
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          gradle assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$PWD/ci.jks" \
+            -Pandroid.injected.signing.store.password=ci-build \
+            -Pandroid.injected.signing.key.alias=ci \
+            -Pandroid.injected.signing.key.password=ci-build
+
+      - name: Upload APK
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: edgerank-apk
+          path: app/build/outputs/apk/release/*.apk
