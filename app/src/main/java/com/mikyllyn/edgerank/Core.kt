@@ -334,10 +334,9 @@ object Prober {
     ) {
         if (State.running) return
         State.running = true
-        ProbeService.start(App.instance)
         val pm = App.instance.getSystemService(PowerManager::class.java)
         val wl = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "edgerank:probe")
-        try { wl?.acquire(60 * 60 * 1000L) } catch (e: Exception) {}
+        try { wl?.acquire(30 * 60 * 1000L) } catch (e: Exception) {}
         State.job = State.scope.launch {
             try {
                 runRank(domain, path, rounds, conc, ecode, mhdr, src)
@@ -348,7 +347,6 @@ object Prober {
             } finally {
                 State.running = false
                 try { if (wl?.isHeld == true) wl.release() } catch (e: Exception) {}
-                ProbeService.stop(App.instance)
             }
         }
     }
