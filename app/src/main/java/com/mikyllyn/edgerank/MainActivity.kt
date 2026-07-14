@@ -1,21 +1,13 @@
 package com.mikyllyn.edgerank
 
-import android.Manifest
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.MediaStore
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
-import java.io.File
 
 class MainActivity : Activity() {
 
@@ -25,12 +17,6 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2001)
-        }
-
         web = WebView(this)
         setContentView(web)
 
@@ -38,23 +24,10 @@ class MainActivity : Activity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             loadWithOverviewMode = true
-            useWideViewPort = true
-            setSupportZoom(true)
-            builtInZoomControls = true
-            displayZoomControls = false
+            useWideViewPort = false
+            builtInZoomControls = false
         }
-
-        web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                val url = request?.url?.toString() ?: return false
-                if (url.contains("/dl/out.csv")) {
-                    saveCsv()
-                    return true
-                }
-                return false
-            }
-        }
-
+        web.webViewClient = WebViewClient()
         web.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
                 webView: WebView?,
@@ -79,40 +52,6 @@ class MainActivity : Activity() {
 
         web.loadUrl("http://127.0.0.1:${App.PORT}/")
     }
-
-    private fun saveCsv() {
-        if (State.results.isEmpty()) {
-            Toast.makeText(this, "Нет данных для CSV — сначала запусти замер", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val csv = buildCsv()
-        val name = "edgerank_${System.currentTimeMillis()}.csv"
-        try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, name)
-                    put(MediaStore.Downloads.MIME_TYPE, "text/csv")
-                    put(MediaStore.Downloads.IS_PENDING, 1)
-                }
-                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                if (uri == null) { toast("Не удалось создать файл"); return }
-                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray()) }
-                values.clear()
-                values.put(MediaStore.Downloads.IS_PENDING, 0)
-                contentResolver.update(uri, values, null, null)
-                toast("Сохранено: Downloads/$name")
-            } else {
-                val dir = getExternalFilesDir(null)
-                val f = File(dir, name)
-                f.writeText(csv)
-                toast("Сохранено: ${f.absolutePath}")
-            }
-        } catch (e: Exception) {
-            toast("Ошибка сохранения: ${e.message}")
-        }
-    }
-
-    private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
