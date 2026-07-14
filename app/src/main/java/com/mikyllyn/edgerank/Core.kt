@@ -301,25 +301,31 @@ object Prober {
 
         showVantage()
         State.log("domain=$domain  path=$path  candidates=${ips.size}")
-        State.log("rounds=$rounds concurrency=$conc screen_timeout=2.5s full_timeout=6s expected_code=${if (ecode == 0) "any" else ecode}")
+        State.log("rounds=$rounds concurrency=$conc screen_connect=2s call<=8s expected_code=${if (ecode == 0) "any" else ecode}")
 
         // phase 1: screening
         if (ips.size > 50) {
             State.log("")
             State.log("phase 1: screening ${ips.size} IPs (1 round each)...")
-            val screen = probePool(domain, path, ips, 1, conc, ecode, mhdr, "screen", 2500, 3500)
+            // Short CONNECT timeout (dead IPs don't accept -> fail fast) but a generous
+            // total timeout so slow-but-alive edges (DPI/whitelist networks) still respond.
+            val screen = probePool(domain, path, ips, 1, conc, ecode, mhdr, "screen", 2000, 8000)
             val survivors = ips.filter { ip ->
                 screen[ip]?.any { isOk(it, ecode) && it.match == 1 } == true
             }
             State.log("phase 1: ${survivors.size} of ${ips.size} responded.")
-            if (survivors.isEmpty()) { State.log("Nothing survived screening."); return }
+            if (survivors.isEmpty()) {
+                State.log("Ни один IP не ответил на screening.")
+                State.log("Подсказка: снизь conc (напр. 16–24), проверь домен/путь/код, выключи VPN.")
+                return
+            }
             ips = survivors
         }
 
         // phase 2: full probe
         State.log("")
         State.log("phase 2: full probe of ${ips.size} IPs ($rounds rounds each)...")
-        val res = probePool(domain, path, ips, rounds, conc, ecode, mhdr, "probe", 5000, 6000)
+        val res = probePool(domain, path, ips, rounds, conc, ecode, mhdr, "probe", 5000, 8000)
 
         val rows = ips.mapNotNull { ip -> res[ip]?.let { computeRow(ip, it, rounds, ecode) } }
             .sortedWith(compareByDescending<Row> { it.score }.thenBy { it.medMs })
