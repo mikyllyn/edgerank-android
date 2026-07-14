@@ -11,7 +11,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import okhttp3.ConnectionPool
 import okhttp3.Dns
 import okhttp3.EventListener
@@ -120,15 +121,11 @@ object Prober {
         .callTimeout(25, TimeUnit.SECONDS)
         .build()
 
-    private fun clientFor(ip: String, connectMs: Long, callMs: Long): OkHttpClient =
-        probeBase.newBuilder()
-            .connectTimeout(connectMs, TimeUnit.MILLISECONDS)
-            .readTimeout(callMs, TimeUnit.MILLISECONDS)
-            .callTimeout(callMs, TimeUnit.MILLISECONDS)
-            .dns(object : Dns {
-                override fun lookup(hostname: String): List<InetAddress> =
-                    listOf(InetAddress.getByName(ip))
-            }).build()
+    private fun clientFor(ip: String): OkHttpClient =
+        probeBase.newBuilder().dns(object : Dns {
+            override fun lookup(hostname: String): List<InetAddress> =
+                listOf(InetAddress.getByName(ip))
+        }).build()
 
     private fun oneProbe(client: OkHttpClient, domain: String, path: String, mhdr: String): Probe {
         return try {
@@ -151,30 +148,28 @@ object Prober {
     private fun isOk(p: Probe, ecode: Int): Boolean =
         if (ecode != 0) p.code == ecode else p.code != 0
 
-    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun probePool(
         domain: String, path: String, ips: List<String>,
-        rounds: Int, conc: Int, ecode: Int, mhdr: String, label: String,
-        connectMs: Long, callMs: Long
+        rounds: Int, conc: Int, ecode: Int, mhdr: String, label: String
     ): Map<String, List<Probe>> = coroutineScope {
-        // limitedParallelism on IO can exceed the default 64-thread cap for I/O-bound work,
-        // so `conc` (e.g. 64-200) is the real number of simultaneous probes.
-        val io = Dispatchers.IO.limitedParallelism(if (conc < 1) 1 else conc)
+        val sem = Semaphore(if (conc < 1) 1 else conc)
         val out = ConcurrentHashMap<String, List<Probe>>()
         val done = AtomicInteger()
         val total = ips.size
         val tasks = ips.map { ip ->
-            async(io) {
-                coroutineContext.ensureActive()
-                val client = clientFor(ip, connectMs, callMs)
-                val list = ArrayList<Probe>(rounds)
-                repeat(rounds) {
+            async(Dispatchers.IO) {
+                sem.withPermit {
                     coroutineContext.ensureActive()
-                    list.add(oneProbe(client, domain, path, mhdr))
+                    val client = clientFor(ip)
+                    val list = ArrayList<Probe>(rounds)
+                    repeat(rounds) {
+                        coroutineContext.ensureActive()
+                        list.add(oneProbe(client, domain, path, mhdr))
+                    }
+                    out[ip] = list
+                    val c = done.incrementAndGet()
+                    if (c % 250 == 0 || c == total) State.log("  $label: $c/$total ...")
                 }
-                out[ip] = list
-                val c = done.incrementAndGet()
-                if (c % 500 == 0 || c == total) State.log("  $label: $c/$total ...")
             }
         }
         tasks.awaitAll()
@@ -301,15 +296,13 @@ object Prober {
 
         showVantage()
         State.log("domain=$domain  path=$path  candidates=${ips.size}")
-        State.log("rounds=$rounds concurrency=$conc screen_connect=2s call<=8s expected_code=${if (ecode == 0) "any" else ecode}")
+        State.log("rounds=$rounds concurrency=$conc timeout=6s expected_code=${if (ecode == 0) "any" else ecode}")
 
         // phase 1: screening
         if (ips.size > 50) {
             State.log("")
             State.log("phase 1: screening ${ips.size} IPs (1 round each)...")
-            // Short CONNECT timeout (dead IPs don't accept -> fail fast) but a generous
-            // total timeout so slow-but-alive edges (DPI/whitelist networks) still respond.
-            val screen = probePool(domain, path, ips, 1, conc, ecode, mhdr, "screen", 2000, 8000)
+            val screen = probePool(domain, path, ips, 1, conc, ecode, mhdr, "screen")
             val survivors = ips.filter { ip ->
                 screen[ip]?.any { isOk(it, ecode) && it.match == 1 } == true
             }
@@ -325,7 +318,7 @@ object Prober {
         // phase 2: full probe
         State.log("")
         State.log("phase 2: full probe of ${ips.size} IPs ($rounds rounds each)...")
-        val res = probePool(domain, path, ips, rounds, conc, ecode, mhdr, "probe", 5000, 8000)
+        val res = probePool(domain, path, ips, rounds, conc, ecode, mhdr, "probe")
 
         val rows = ips.mapNotNull { ip -> res[ip]?.let { computeRow(ip, it, rounds, ecode) } }
             .sortedWith(compareByDescending<Row> { it.score }.thenBy { it.medMs })
