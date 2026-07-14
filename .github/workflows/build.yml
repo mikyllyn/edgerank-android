@@ -27,6 +27,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+          cache-disabled: true
 
       - name: Generate self-signed keystore
         run: |
@@ -39,7 +40,7 @@ jobs:
       - name: Build signed release APK
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          gradle assembleRelease --no-daemon \
+          gradle assembleRelease --no-daemon --no-build-cache --no-configuration-cache \
             -Pandroid.injected.signing.store.file="$PWD/ci.jks" \
             -Pandroid.injected.signing.store.password=ci-build \
             -Pandroid.injected.signing.key.alias=ci \

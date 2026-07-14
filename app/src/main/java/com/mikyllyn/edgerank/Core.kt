@@ -48,17 +48,6 @@ data class Row(
     val codes: String
 )
 
-/** Build the ranked-results CSV (shared by the web /dl endpoint and the WebView saver). */
-fun buildCsv(): String {
-    val sb = StringBuilder("rank,ip,ok,fail,score,med_ms,avg_ms,p95_ms,min_ms,max_ms,jit_ms,codes\n")
-    State.results.forEachIndexed { i, r ->
-        sb.append("${i + 1},${r.ip},${r.ok},${r.fail},${String.format("%.1f", r.score)},")
-            .append("${r.medMs},${r.avgMs},${r.p95Ms},${r.minMs},${r.maxMs},${String.format("%.1f", r.jitMs)},")
-            .append("\"${r.codes}\"\n")
-    }
-    return sb.toString()
-}
-
 /** Shared, process-wide state for the web UI. */
 object State {
     @Volatile var running = false
@@ -296,7 +285,7 @@ object Prober {
 
         showVantage()
         State.log("domain=$domain  path=$path  candidates=${ips.size}")
-        State.log("rounds=$rounds concurrency=$conc timeout=6s expected_code=${if (ecode == 0) "any" else ecode}")
+        State.log("rounds=$rounds timeout=6s concurrency=$conc expected_code=${if (ecode == 0) "any" else ecode}")
 
         // phase 1: screening
         if (ips.size > 50) {
@@ -307,11 +296,7 @@ object Prober {
                 screen[ip]?.any { isOk(it, ecode) && it.match == 1 } == true
             }
             State.log("phase 1: ${survivors.size} of ${ips.size} responded.")
-            if (survivors.isEmpty()) {
-                State.log("Ни один IP не ответил на screening.")
-                State.log("Подсказка: снизь conc (напр. 16–24), проверь домен/путь/код, выключи VPN.")
-                return
-            }
+            if (survivors.isEmpty()) { State.log("Nothing survived screening."); return }
             ips = survivors
         }
 
