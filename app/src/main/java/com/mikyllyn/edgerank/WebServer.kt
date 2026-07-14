@@ -73,6 +73,7 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
             sb.append(vbanner())
             if (State.meta.isNotEmpty()) sb.append("<p>${esc(State.meta)}</p>")
             sb.append("<pre>").append(esc(tail(State.progressText(), 16))).append("</pre>")
+            sb.append("<p class=good>можно заблокировать экран — замер продолжится в фоне (уведомление активно).</p>")
             sb.append("<p><a href='/?action=cancel'>отменить замер</a> · <a href='/'>к форме</a></p>")
             return html(sb.toString(), sort = false)
         }
@@ -233,15 +234,8 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
         return html(body)
     }
 
-    private fun csv(): Response {
-        val sb = StringBuilder("rank,ip,ok,fail,score,med_ms,avg_ms,p95_ms,min_ms,max_ms,jit_ms,codes\n")
-        State.results.forEachIndexed { i, r ->
-            sb.append("${i + 1},${r.ip},${r.ok},${r.fail},${fmt1(r.score)},")
-                .append("${r.medMs},${r.avgMs},${r.p95Ms},${r.minMs},${r.maxMs},${fmt1(r.jitMs)},")
-                .append("\"${r.codes}\"\n")
-        }
-        return newFixedLengthResponse(Response.Status.OK, "text/csv; charset=utf-8", sb.toString())
-    }
+    private fun csv(): Response =
+        newFixedLengthResponse(Response.Status.OK, "text/csv; charset=utf-8", buildCsv())
 
     // ---- helpers ---------------------------------------------------------
 

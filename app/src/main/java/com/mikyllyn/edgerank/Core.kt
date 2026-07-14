@@ -48,6 +48,17 @@ data class Row(
     val codes: String
 )
 
+/** Build the ranked-results CSV (shared by the web /dl endpoint and the WebView saver). */
+fun buildCsv(): String {
+    val sb = StringBuilder("rank,ip,ok,fail,score,med_ms,avg_ms,p95_ms,min_ms,max_ms,jit_ms,codes\n")
+    State.results.forEachIndexed { i, r ->
+        sb.append("${i + 1},${r.ip},${r.ok},${r.fail},${String.format("%.1f", r.score)},")
+            .append("${r.medMs},${r.avgMs},${r.p95Ms},${r.minMs},${r.maxMs},${String.format("%.1f", r.jitMs)},")
+            .append("\"${r.codes}\"\n")
+    }
+    return sb.toString()
+}
+
 /** Shared, process-wide state for the web UI. */
 object State {
     @Volatile var running = false
@@ -319,9 +330,10 @@ object Prober {
     ) {
         if (State.running) return
         State.running = true
+        ProbeService.start(App.instance)
         val pm = App.instance.getSystemService(PowerManager::class.java)
         val wl = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "edgerank:probe")
-        try { wl?.acquire(30 * 60 * 1000L) } catch (e: Exception) {}
+        try { wl?.acquire(60 * 60 * 1000L) } catch (e: Exception) {}
         State.job = State.scope.launch {
             try {
                 runRank(domain, path, rounds, conc, ecode, mhdr, src)
@@ -332,6 +344,7 @@ object Prober {
             } finally {
                 State.running = false
                 try { if (wl?.isHeld == true) wl.release() } catch (e: Exception) {}
+                ProbeService.stop(App.instance)
             }
         }
     }
