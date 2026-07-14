@@ -261,7 +261,8 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
     }
 
     private fun vbanner(): String {
-        val markers = listOf("ТЕСТ ИДЁТ С IP", "регион:", "провайдер:", "ASN:")
+        val markers = listOf("ТЕСТ ИДЁТ С IP", "регион:", "провайдер:", "ASN:",
+            "НЕТ ИНТЕРНЕТА", "проверь мобильный", "без интернета")
         val lines = State.progressText().lines().filter { l -> markers.any { l.contains(it) } }
         return if (lines.isEmpty()) "" else "<pre class=good>${esc(lines.joinToString("\n"))}</pre>"
     }
