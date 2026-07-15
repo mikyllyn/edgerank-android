@@ -45,7 +45,7 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
         var path = sp(p(session, "path")); if (path.isEmpty()) path = "/"
         if (!path.startsWith("/")) path = "/$path"
         val rounds = sn(p(session, "rounds")).toIntOrNull() ?: 10
-        val conc = sn(p(session, "conc")).toIntOrNull() ?: 16
+        val conc = sn(p(session, "conc")).toIntOrNull() ?: 64
         val ecode = sn(p(session, "ecode")).toIntOrNull() ?: 400
         val mhdr = shd(p(session, "mhdr"))
 
@@ -197,9 +197,10 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
   <div>домен: <input name="domain" size="34" value="${esc(domain)}"></div>
   <div>путь: &nbsp; <input name="path" size="34" value="${esc(path)}"></div>
   <div>rounds <input name="rounds" size="3" value="10">
-       conc <input name="conc" size="3" value="16">
+       conc <input name="conc" size="3" value="64">
        код <input name="ecode" size="3" value="400">
        заголовок <input name="mhdr" size="16" value="x-cdn-edge-cache"></div>
+  <div class=warn>conc = параллельность (скорость). 64 обычно; 128–256 быстрее. Если живых эджей стало мало — снизь до 16–32 (сеть режет соединения под нагрузкой). Таймаут не менялся, живые эджи не теряются.</div>
   <div>список:
     <select name="src">
       <option value="edges">полный список (${State.edges.size} IP, медленно)</option>

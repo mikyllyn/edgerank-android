@@ -11,8 +11,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import okhttp3.ConnectionPool
 import okhttp3.Dns
 import okhttp3.EventListener
@@ -148,28 +147,30 @@ object Prober {
     private fun isOk(p: Probe, ecode: Int): Boolean =
         if (ecode != 0) p.code == ecode else p.code != 0
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun probePool(
         domain: String, path: String, ips: List<String>,
         rounds: Int, conc: Int, ecode: Int, mhdr: String, label: String
     ): Map<String, List<Probe>> = coroutineScope {
-        val sem = Semaphore(if (conc < 1) 1 else conc)
+        // limitedParallelism on IO can exceed the default ~64-thread cap for I/O-bound
+        // work, so `conc` (e.g. 64-256) is the real number of simultaneous probes.
+        // Timeouts stay at probeBase's 5s/6s (NOT shortened) so DPI edges aren't dropped.
+        val io = Dispatchers.IO.limitedParallelism(if (conc < 1) 1 else conc)
         val out = ConcurrentHashMap<String, List<Probe>>()
         val done = AtomicInteger()
         val total = ips.size
         val tasks = ips.map { ip ->
-            async(Dispatchers.IO) {
-                sem.withPermit {
+            async(io) {
+                coroutineContext.ensureActive()
+                val client = clientFor(ip)
+                val list = ArrayList<Probe>(rounds)
+                repeat(rounds) {
                     coroutineContext.ensureActive()
-                    val client = clientFor(ip)
-                    val list = ArrayList<Probe>(rounds)
-                    repeat(rounds) {
-                        coroutineContext.ensureActive()
-                        list.add(oneProbe(client, domain, path, mhdr))
-                    }
-                    out[ip] = list
-                    val c = done.incrementAndGet()
-                    if (c % 250 == 0 || c == total) State.log("  $label: $c/$total ...")
+                    list.add(oneProbe(client, domain, path, mhdr))
                 }
+                out[ip] = list
+                val c = done.incrementAndGet()
+                if (c % 500 == 0 || c == total) State.log("  $label: $c/$total ...")
             }
         }
         tasks.awaitAll()
@@ -215,11 +216,12 @@ object Prober {
     private const val BROWSER_UA =
         "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
-    // Отдельный клиент с КОРОТКИМ таймаутом только для vantage — чтобы он не завис.
+    // Клиент для vantage. Таймаут щедрый: vantage крутится в отдельной корутине и
+    // на замер не влияет, поэтому под белым списком/DPI даём странице Яндекса время.
     private val vantageClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .callTimeout(7, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
         .build()
 
     private fun vget(url: String): String? = try {
