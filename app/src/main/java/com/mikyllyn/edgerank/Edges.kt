@@ -52,32 +52,37 @@ object Edges {
     }
 
     /** Fetch real announced BGP prefixes for an ASN from RIPEstat, expand to IPs. */
-    fun fetchBgp(asn: Int): List<String> {
-        State.bgpLog("Тяну анонсируемые префиксы AS$asn из RIPEstat…")
+    /** Fetch announced BGP prefixes for one or several ASNs (multi-CDN) and expand to IPs. */
+    fun fetchBgp(asns: List<Int>): List<String> {
         val prefixes = ArrayList<String>()
-        try {
-            val body = Prober.apiClient.newCall(
-                Request.Builder()
-                    .url("https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS$asn")
-                    .build()
-            ).execute().use { it.body?.string() ?: "" }
-            val arr = JSONObject(body).optJSONObject("data")?.optJSONArray("prefixes")
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val pfx = arr.getJSONObject(i).optString("prefix")
-                    if (pfx.isNotEmpty() && !pfx.contains(":")) prefixes.add(pfx)
+        for (asn in asns) {
+            State.bgpLog("Тяну префиксы AS$asn из RIPEstat…")
+            var cnt = 0
+            try {
+                val body = Prober.apiClient.newCall(
+                    Request.Builder()
+                        .url("https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS$asn")
+                        .build()
+                ).execute().use { it.body?.string() ?: "" }
+                val arr = JSONObject(body).optJSONObject("data")?.optJSONArray("prefixes")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val pfx = arr.getJSONObject(i).optString("prefix")
+                        if (pfx.isNotEmpty() && !pfx.contains(":")) { prefixes.add(pfx); cnt++ }
+                    }
                 }
+                State.bgpLog("  AS$asn: $cnt IPv4-префиксов")
+            } catch (e: Exception) {
+                State.bgpLog("  AS$asn: RIPEstat недоступен (${e.message})")
             }
-        } catch (e: Exception) {
-            State.bgpLog("RIPEstat недоступен (${e.message}).")
         }
 
         val usePrefixes = if (prefixes.isEmpty()) {
-            State.bgpLog("Беру встроенный запасной список CDNvideo.")
+            State.bgpLog("Ничего не получено — беру встроенный запасной список CDNvideo.")
             FALLBACK_CIDRS
-        } else prefixes
+        } else prefixes.distinct()
 
-        State.bgpLog("IPv4-префиксов: ${usePrefixes.size}")
+        State.bgpLog("Всего префиксов: ${usePrefixes.size}, разворачиваю…")
         val out = ArrayList<String>()
         for (c in usePrefixes) expandCidr(c, out)
         val result = out.distinct()

@@ -142,20 +142,27 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
     }
 
     private fun doBgp(session: IHTTPSession): Response {
-        val asn = sn(p(session, "asn")).toIntOrNull() ?: 57363
+        // Принимаем несколько ASN через запятую/пробел (мульти-CDN), напр. "204720,57363".
+        val asns = p(session, "asn")
+            .split(",", " ", ";", "\n")
+            .mapNotNull { it.filter { c -> c.isDigit() }.toIntOrNull() }
+            .filter { it > 0 }
+            .distinct()
+        val asnList = if (asns.isEmpty()) listOf(57363) else asns
+        val asnLabel = asnList.joinToString(",") { "AS$it" }
         if (p(session, "go") == "1" && !State.bgpRunning) {
             State.bgpReset()
             State.bgpRunning = true
             State.scope.launch {
-                try { State.edges = Edges.fetchBgp(asn) }
+                try { State.edges = Edges.fetchBgp(asnList) }
                 catch (e: Exception) { State.bgpLog("ошибка: ${e.message}") }
                 finally { State.bgpRunning = false }
             }
         }
         val sb = StringBuilder()
         return if (State.bgpRunning) {
-            sb.append("<meta http-equiv=\"refresh\" content=\"2;url=/?action=bgp\">")
-            sb.append("<h3>Обновляю edges из BGP (AS$asn)… <span class=warn>(автообновление)</span></h3>")
+            sb.append("<meta http-equiv=\"refresh\" content=\"2;url=/?action=bgp&asn=${asnList.joinToString(",")}\">")
+            sb.append("<h3>Обновляю edges из BGP ($asnLabel)… <span class=warn>(автообновление)</span></h3>")
             sb.append("<pre>").append(esc(tail(State.bgpLogText(), 8))).append("</pre>")
             html(sb.toString())
         } else {
@@ -217,9 +224,9 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
 <form action="/" method="get">
   <input type="hidden" name="action" value="bgp">
   <input type="hidden" name="go" value="1">
-  <div>обновить список из BGP: AS<input name="asn" size="7" value="57363">
-  <button type="submit">Обновить из BGP</button>
-  <span class=warn>(реальные префиксы ASN из RIPEstat)</span></div>
+  <div>обновить список из BGP: AS<input name="asn" size="16" value="204720,57363">
+  <button type="submit">Обновить из BGP</button></div>
+  <div class=warn>можно несколько ASN через запятую (мульти-CDN: домен маршрутизируется на разные сети у разных операторов) — стянет префиксы всех и объединит.</div>
 </form>
 <form action="/?action=upload" method="post" enctype="multipart/form-data">
   <div>свой список IP (заменит текущий):</div>
