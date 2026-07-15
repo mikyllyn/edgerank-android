@@ -201,13 +201,61 @@ object Prober {
         )
     }
 
+    private const val BROWSER_UA =
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+    // Отдельный клиент с КОРОТКИМ таймаутом только для vantage — чтобы он не завис.
+    private val vantageClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .callTimeout(7, TimeUnit.SECONDS)
+        .build()
+
+    private fun vget(url: String): String? = try {
+        vantageClient.newCall(
+            Request.Builder().url(url)
+                .header("User-Agent", BROWSER_UA)
+                .header("Accept", "text/html,application/json,*/*")
+                .header("Accept-Language", "ru,en;q=0.9")
+                .build()
+        ).execute().use { if (it.isSuccessful) it.body?.string() else null }
+    } catch (e: Throwable) { null }
+
+    /** Vantage через Яндекс Интернетометр — для белых списков. Полностью изолирован. */
+    private fun yandexVantage(): Boolean = try {
+        var ip = vget("https://yandex.ru/internet/api/v0/ip")?.trim()?.trim('"') ?: ""
+        val page = vget("https://yandex.ru/internet/") ?: ""
+        if (!IPV4.matches(ip)) ip = Regex("\"v4\":\"([^\"]*)\"").find(page)?.groupValues?.get(1) ?: ""
+        if (!IPV4.matches(ip)) {
+            false
+        } else {
+            val ispBlock = Regex("\"isp\":\\{([^}]*)}").find(page)?.groupValues?.get(1) ?: ""
+            val isp = Regex("\"localName\":\"([^\"]*)\"").find(ispBlock)?.groupValues?.get(1) ?: ""
+            val asn = Regex("\"asn\":\\[([0-9,]*)]").find(ispBlock)?.groupValues?.get(1) ?: ""
+            val vpn = when (Regex("\"isVpn\":(true|false)").find(ispBlock)?.groupValues?.get(1)) {
+                "true" -> "да"; "false" -> "нет"; else -> "?"
+            }
+            val provider = when {
+                isp.isNotEmpty() -> "$isp   |  VPN по мнению Яндекса: $vpn"
+                asn.isNotEmpty() -> "имя не указано (ASN $asn)   |  VPN: $vpn"
+                else -> "Яндекс не отдал имя провайдера для этой сети"
+            }
+            State.log("==============================================================")
+            State.log(" ТЕСТ ИДЁТ С IP: $ip   (источник: Яндекс Интернетометр)")
+            State.log("   провайдер:   $provider")
+            State.log("   ASN:         ${asn.ifEmpty { "?" }}")
+            State.log("   -> это ТВОЙ провайдер? если нет — VPN включён, выключи его.")
+            State.log("==============================================================")
+            true
+        }
+    } catch (e: Throwable) { false }
+
     /**
-     * Vantage IP — как в рабочей v1.0: ip-api (регион/провайдер), затем ipify.
-     * Никаких тяжёлых сторонних fetch'ей на старте; всё в try/catch, чтобы vantage
-     * ни при каких условиях не мог повлиять на сам замер. Возвращает true, если
-     * внешний IP определён (есть связь).
+     * Best-effort vantage. Вызывается из ОТДЕЛЬНОЙ корутины, поэтому не может ни
+     * задержать, ни оборвать замер. Яндекс (белые списки) -> ip-api -> ipify.
      */
     private fun showVantage(): Boolean {
+        if (yandexVantage()) return true
         try {
             val line = apiClient.newCall(
                 Request.Builder()
@@ -251,7 +299,8 @@ object Prober {
         var ips = src.filter { IPV4.matches(it) }.distinct()
         if (ips.isEmpty()) { State.log("Нет кандидатов IP (список пуст)."); return }
 
-        try { showVantage() } catch (e: Exception) { State.log("vantage: ${e.message}") }
+        // vantage — в ОТДЕЛЬНОЙ корутине: замер стартует сразу, vantage не может на него влиять.
+        State.scope.launch { try { showVantage() } catch (e: Throwable) {} }
         State.log("domain=$domain  path=$path  candidates=${ips.size}")
         State.log("rounds=$rounds timeout=6s concurrency=$conc expected_code=${if (ecode == 0) "any" else ecode}")
 
@@ -287,9 +336,10 @@ object Prober {
     ) {
         if (State.running) return
         State.running = true
+        try { ProbeService.start(App.instance) } catch (e: Throwable) {}
         val pm = App.instance.getSystemService(PowerManager::class.java)
         val wl = pm?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "edgerank:probe")
-        try { wl?.acquire(30 * 60 * 1000L) } catch (e: Exception) {}
+        try { wl?.acquire(60 * 60 * 1000L) } catch (e: Exception) {}
         State.job = State.scope.launch {
             try {
                 runRank(domain, path, rounds, conc, ecode, mhdr, src)
@@ -300,6 +350,7 @@ object Prober {
             } finally {
                 State.running = false
                 try { if (wl?.isHeld == true) wl.release() } catch (e: Exception) {}
+                try { ProbeService.stop(App.instance) } catch (e: Throwable) {}
             }
         }
     }
