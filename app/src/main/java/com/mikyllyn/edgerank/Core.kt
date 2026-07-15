@@ -48,6 +48,17 @@ data class Row(
     val codes: String
 )
 
+/** Build the ranked-results CSV (used by the WebView saver and /dl endpoint). */
+fun buildCsv(): String {
+    val sb = StringBuilder("rank,ip,ok,fail,score,med_ms,avg_ms,p95_ms,min_ms,max_ms,jit_ms,codes\n")
+    State.results.forEachIndexed { i, r ->
+        sb.append("${i + 1},${r.ip},${r.ok},${r.fail},${String.format("%.1f", r.score)},")
+            .append("${r.medMs},${r.avgMs},${r.p95Ms},${r.minMs},${r.maxMs},${String.format("%.1f", r.jitMs)},")
+            .append("\"${r.codes}\"\n")
+    }
+    return sb.toString()
+}
+
 /** Shared, process-wide state for the web UI. */
 object State {
     @Volatile var running = false
