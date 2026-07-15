@@ -261,9 +261,11 @@ object Prober {
             State.log("vantage(Яндекс): страница /internet ${if (page.isEmpty()) "не открылась" else "открылась (${page.length} б)"}")
             return false
         }
-        val ispBlock = Regex("\"isp\":\\{([^}]*)}").find(page)?.groupValues?.get(1) ?: ""
+        // Внимание: Android-regex (ICU) падает на одиночной '}'/']' в конце паттерна,
+        // поэтому НЕ ставим замыкающие скобки — [^}]* и так останавливается перед '}'.
+        val ispBlock = Regex("\"isp\":\\{([^}]*)").find(page)?.groupValues?.get(1) ?: ""
         val isp = Regex("\"localName\":\"([^\"]*)\"").find(ispBlock)?.groupValues?.get(1) ?: ""
-        val asn = Regex("\"asn\":\\[([0-9,]*)]").find(ispBlock)?.groupValues?.get(1) ?: ""
+        val asn = Regex("\"asn\":\\[([0-9,]*)").find(ispBlock)?.groupValues?.get(1) ?: ""
         val vpn = when (Regex("\"isVpn\":(true|false)").find(ispBlock)?.groupValues?.get(1)) {
             "true" -> "да"; "false" -> "нет"; else -> "?"
         }
