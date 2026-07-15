@@ -352,10 +352,13 @@ object Prober {
             ips = survivors
         }
 
-        // phase 2: full probe
+        // phase 2: full probe. Параллельность здесь ограничиваем (<=24): высокий conc
+        // насыщает телефон и раздувает измеряемый джиттер/задержку. Детект эджей от этого
+        // не страдает (это фаза точных измерений выживших, их немного).
+        val fullConc = if (conc > 16) 16 else conc
         State.log("")
-        State.log("phase 2: full probe of ${ips.size} IPs ($rounds rounds each)...")
-        val res = probePool(domain, path, ips, rounds, conc, ecode, mhdr, "probe")
+        State.log("phase 2: full probe of ${ips.size} IPs ($rounds rounds each, conc=$fullConc для точных времён)...")
+        val res = probePool(domain, path, ips, rounds, fullConc, ecode, mhdr, "probe")
 
         val rows = ips.mapNotNull { ip -> res[ip]?.let { computeRow(ip, it, rounds, ecode) } }
             .sortedWith(compareByDescending<Row> { it.score }.thenBy { it.medMs })

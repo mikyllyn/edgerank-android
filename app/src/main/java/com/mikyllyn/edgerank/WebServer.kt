@@ -70,9 +70,8 @@ class WebServer(port: Int) : NanoHTTPD("127.0.0.1", port) {
         if (State.running) {
             sb.append("<meta http-equiv=\"refresh\" content=\"3\">")
             sb.append("<h3>Идёт замер… <span class=warn>(автообновление каждые 3с)</span></h3>")
-            sb.append(vbanner())
             if (State.meta.isNotEmpty()) sb.append("<p>${esc(State.meta)}</p>")
-            sb.append("<pre>").append(esc(tail(State.progressText(), 16))).append("</pre>")
+            sb.append("<pre>").append(esc(tail(State.progressText(), 18))).append("</pre>")
             sb.append("<p class=good>можно заблокировать экран — замер продолжится в фоне (активно уведомление).</p>")
             sb.append("<p><a href='/?action=cancel'>отменить замер</a> · <a href='/'>к форме</a></p>")
             return html(sb.toString(), sort = false)
