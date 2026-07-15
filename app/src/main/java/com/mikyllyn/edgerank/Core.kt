@@ -216,12 +216,11 @@ object Prober {
     private const val BROWSER_UA =
         "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
-    // Клиент для vantage. Таймаут щедрый: vantage крутится в отдельной корутине и
-    // на замер не влияет, поэтому под белым списком/DPI даём странице Яндекса время.
+    // Клиент для vantage. Умеренный таймаут: vantage теперь идёт ДО скана.
     private val vantageClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .callTimeout(25, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
         .build()
 
     private fun vget(url: String): String? = try {
@@ -234,34 +233,53 @@ object Prober {
         ).execute().use { if (it.isSuccessful) it.body?.string() else null }
     } catch (e: Throwable) { null }
 
-    /** Vantage через Яндекс Интернетометр — для белых списков. Полностью изолирован. */
-    private fun yandexVantage(): Boolean = try {
-        var ip = vget("https://yandex.ru/internet/api/v0/ip")?.trim()?.trim('"') ?: ""
+    /** Vantage через Яндекс Интернетометр — для белых списков. С диагностикой. */
+    private fun yandexVantage(): Boolean {
+        var apiStatus = -1
+        var apiBody = ""
+        try {
+            vantageClient.newCall(
+                Request.Builder()
+                    .url("https://yandex.ru/internet/api/v0/ip")
+                    .header("User-Agent", BROWSER_UA)
+                    .header("Accept", "application/json,text/plain,*/*")
+                    .header("Accept-Language", "ru,en;q=0.9")
+                    .build()
+            ).execute().use {
+                apiStatus = it.code
+                apiBody = it.body?.string() ?: ""
+            }
+        } catch (e: Throwable) {
+            State.log("vantage(Яндекс): запрос IP упал — ${e.message}")
+        }
         val page = vget("https://yandex.ru/internet/") ?: ""
+        var ip = apiBody.trim().trim('"')
         if (!IPV4.matches(ip)) ip = Regex("\"v4\":\"([^\"]*)\"").find(page)?.groupValues?.get(1) ?: ""
         if (!IPV4.matches(ip)) {
-            false
-        } else {
-            val ispBlock = Regex("\"isp\":\\{([^}]*)}").find(page)?.groupValues?.get(1) ?: ""
-            val isp = Regex("\"localName\":\"([^\"]*)\"").find(ispBlock)?.groupValues?.get(1) ?: ""
-            val asn = Regex("\"asn\":\\[([0-9,]*)]").find(ispBlock)?.groupValues?.get(1) ?: ""
-            val vpn = when (Regex("\"isVpn\":(true|false)").find(ispBlock)?.groupValues?.get(1)) {
-                "true" -> "да"; "false" -> "нет"; else -> "?"
-            }
-            val provider = when {
-                isp.isNotEmpty() -> "$isp   |  VPN по мнению Яндекса: $vpn"
-                asn.isNotEmpty() -> "имя не указано (ASN $asn)   |  VPN: $vpn"
-                else -> "Яндекс не отдал имя провайдера для этой сети"
-            }
-            State.log("==============================================================")
-            State.log(" ТЕСТ ИДЁТ С IP: $ip   (источник: Яндекс Интернетометр)")
-            State.log("   провайдер:   $provider")
-            State.log("   ASN:         ${asn.ifEmpty { "?" }}")
-            State.log("   -> это ТВОЙ провайдер? если нет — VPN включён, выключи его.")
-            State.log("==============================================================")
-            true
+            val snip = apiBody.take(120).replace(Regex("\\s+"), " ").trim()
+            State.log("vantage(Яндекс): IP не получен. api HTTP=$apiStatus, ответ: «$snip»")
+            State.log("vantage(Яндекс): страница /internet ${if (page.isEmpty()) "не открылась" else "открылась (${page.length} б)"}")
+            return false
         }
-    } catch (e: Throwable) { false }
+        val ispBlock = Regex("\"isp\":\\{([^}]*)}").find(page)?.groupValues?.get(1) ?: ""
+        val isp = Regex("\"localName\":\"([^\"]*)\"").find(ispBlock)?.groupValues?.get(1) ?: ""
+        val asn = Regex("\"asn\":\\[([0-9,]*)]").find(ispBlock)?.groupValues?.get(1) ?: ""
+        val vpn = when (Regex("\"isVpn\":(true|false)").find(ispBlock)?.groupValues?.get(1)) {
+            "true" -> "да"; "false" -> "нет"; else -> "?"
+        }
+        val provider = when {
+            isp.isNotEmpty() -> "$isp   |  VPN по мнению Яндекса: $vpn"
+            asn.isNotEmpty() -> "имя не указано (ASN $asn)   |  VPN: $vpn"
+            else -> "Яндекс не отдал имя провайдера для этой сети"
+        }
+        State.log("==============================================================")
+        State.log(" ТЕСТ ИДЁТ С IP: $ip   (источник: Яндекс Интернетометр)")
+        State.log("   провайдер:   $provider")
+        State.log("   ASN:         ${asn.ifEmpty { "?" }}")
+        State.log("   -> это ТВОЙ провайдер? если нет — VPN включён, выключи его.")
+        State.log("==============================================================")
+        return true
+    }
 
     /**
      * Best-effort vantage. Вызывается из ОТДЕЛЬНОЙ корутины, поэтому не может ни
@@ -312,8 +330,10 @@ object Prober {
         var ips = src.filter { IPV4.matches(it) }.distinct()
         if (ips.isEmpty()) { State.log("Нет кандидатов IP (список пуст)."); return }
 
-        // vantage — в ОТДЕЛЬНОЙ корутине: замер стартует сразу, vantage не может на него влиять.
-        State.scope.launch { try { showVantage() } catch (e: Throwable) {} }
+        // Внешний IP определяем ДО скана. Обёрнуто в try/catch(Throwable), поэтому
+        // vantage не может оборвать замер (детач-версия доказала: запрос к Яндексу
+        // пробам не мешает, а от исключения защищает обёртка).
+        try { showVantage() } catch (e: Throwable) { State.log("vantage: ${e.message}") }
         State.log("domain=$domain  path=$path  candidates=${ips.size}")
         State.log("rounds=$rounds timeout=6s concurrency=$conc expected_code=${if (ecode == 0) "any" else ecode}")
 
